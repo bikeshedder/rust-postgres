@@ -1,6 +1,7 @@
 use crate::client::{InnerClient, Responses};
 use crate::codec::FrontendMessage;
 use crate::connection::RequestMessages;
+use crate::slice_iter;
 use crate::types::{IsNull, ToSql};
 use crate::{Error, Portal, Row, Statement};
 use bytes::{Bytes, BytesMut};
@@ -12,13 +13,14 @@ use std::marker::PhantomPinned;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+
 pub async fn query<'a, I>(
     client: &InnerClient,
     statement: Statement,
     params: I,
 ) -> Result<RowStream, Error>
 where
-    I: IntoIterator<Item = &'a dyn ToSql>,
+    I: IntoIterator<Item = &'a (dyn ToSql + Sync)>,
     I::IntoIter: ExactSizeIterator,
 {
     let buf = if log::log_enabled!(log::Level::Debug) {
@@ -28,7 +30,7 @@ where
             statement.name(),
             params,
         );
-        encode(client, &statement, params)?
+        encode(client, &statement, slice_iter(params.as_slice()))?
     } else {
         encode(client, &statement, params)?
     };
@@ -66,7 +68,7 @@ pub async fn execute<'a, I>(
     params: I,
 ) -> Result<u64, Error>
 where
-    I: IntoIterator<Item = &'a dyn ToSql>,
+    I: IntoIterator<Item = &'a (dyn ToSql + Sync)>,
     I::IntoIter: ExactSizeIterator,
 {
     let buf = if log::log_enabled!(log::Level::Debug) {
@@ -76,7 +78,7 @@ where
             statement.name(),
             params,
         );
-        encode(client, &statement, params)?
+        encode(client, &statement, slice_iter(params.as_slice()))?
     } else {
         encode(client, &statement, params)?
     };
@@ -115,7 +117,7 @@ async fn start(client: &InnerClient, buf: Bytes) -> Result<Responses, Error> {
 
 pub fn encode<'a, I>(client: &InnerClient, statement: &Statement, params: I) -> Result<Bytes, Error>
 where
-    I: IntoIterator<Item = &'a dyn ToSql>,
+    I: IntoIterator<Item = &'a (dyn ToSql + Sync)>,
     I::IntoIter: ExactSizeIterator,
 {
     client.with_buf(|buf| {
@@ -133,7 +135,7 @@ pub fn encode_bind<'a, I>(
     buf: &mut BytesMut,
 ) -> Result<(), Error>
 where
-    I: IntoIterator<Item = &'a dyn ToSql>,
+    I: IntoIterator<Item = &'a (dyn ToSql + Sync)>,
     I::IntoIter: ExactSizeIterator,
 {
     let params = params.into_iter();

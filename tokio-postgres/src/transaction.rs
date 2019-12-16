@@ -136,7 +136,7 @@ impl<'a> Transaction<'a> {
     pub async fn query_raw<'b, T, I>(&self, statement: &T, params: I) -> Result<RowStream, Error>
     where
         T: ?Sized + ToStatement,
-        I: IntoIterator<Item = &'b dyn ToSql>,
+        I: IntoIterator<Item = &'b (dyn ToSql + Sync)>,
         I::IntoIter: ExactSizeIterator,
     {
         self.client.query_raw(statement, params).await
@@ -162,7 +162,7 @@ impl<'a> Transaction<'a> {
     ) -> Result<u64, Error>
     where
         T: ?Sized + ToStatement,
-        I: IntoIterator<Item = &'b dyn ToSql>,
+        I: IntoIterator<Item = &'b (dyn ToSql + Sync)>,
         I::IntoIter: ExactSizeIterator,
     {
         self.client.execute_raw(statement, params).await
@@ -193,7 +193,7 @@ impl<'a> Transaction<'a> {
     pub async fn bind_iter<'b, T, I>(&self, statement: &T, params: I) -> Result<Portal, Error>
     where
         T: ?Sized + ToStatement,
-        I: IntoIterator<Item = &'b dyn ToSql>,
+        I: IntoIterator<Item = &'b (dyn ToSql + Sync)>,
         I::IntoIter: ExactSizeIterator,
     {
         let statement = statement.__convert().into_statement(&self.client).await?;

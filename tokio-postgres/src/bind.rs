@@ -16,7 +16,7 @@ pub async fn bind<'a, I>(
     params: I,
 ) -> Result<Portal, Error>
 where
-    I: IntoIterator<Item = &'a dyn ToSql>,
+    I: IntoIterator<Item = &'a (dyn ToSql + Sync)>,
     I::IntoIter: ExactSizeIterator,
 {
     let name = format!("p{}", NEXT_ID.fetch_add(1, Ordering::SeqCst));

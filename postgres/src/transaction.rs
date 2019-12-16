@@ -76,7 +76,7 @@ impl<'a> Transaction<'a> {
     pub fn query_raw<'b, T, I>(&mut self, query: &T, params: I) -> Result<RowIter<'_>, Error>
     where
         T: ?Sized + ToStatement,
-        I: IntoIterator<Item = &'b dyn ToSql>,
+        I: IntoIterator<Item = &'b (dyn ToSql + Sync)>,
         I::IntoIter: ExactSizeIterator,
     {
         let stream = executor::block_on(self.0.query_raw(query, params))?;

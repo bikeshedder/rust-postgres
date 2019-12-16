@@ -320,7 +320,7 @@ impl Client {
     pub async fn query_raw<'a, T, I>(&self, statement: &T, params: I) -> Result<RowStream, Error>
     where
         T: ?Sized + ToStatement,
-        I: IntoIterator<Item = &'a dyn ToSql>,
+        I: IntoIterator<Item = &'a (dyn ToSql + Sync)>,
         I::IntoIter: ExactSizeIterator,
     {
         let statement = statement.__convert().into_statement(self).await?;
@@ -369,7 +369,7 @@ impl Client {
     pub async fn execute_raw<'a, T, I>(&self, statement: &T, params: I) -> Result<u64, Error>
     where
         T: ?Sized + ToStatement,
-        I: IntoIterator<Item = &'a dyn ToSql>,
+        I: IntoIterator<Item = &'a (dyn ToSql + Sync)>,
         I::IntoIter: ExactSizeIterator,
     {
         let statement = statement.__convert().into_statement(self).await?;

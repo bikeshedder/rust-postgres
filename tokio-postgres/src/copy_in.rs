@@ -202,7 +202,7 @@ pub async fn copy_in<'a, I, T>(
     params: I,
 ) -> Result<CopyInSink<T>, Error>
 where
-    I: IntoIterator<Item = &'a dyn ToSql>,
+    I: IntoIterator<Item = &'a (dyn ToSql + Sync)>,
     I::IntoIter: ExactSizeIterator,
     T: Buf + 'static + Send,
 {

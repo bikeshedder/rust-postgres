@@ -17,7 +17,7 @@ pub async fn copy_out<'a, I>(
     params: I,
 ) -> Result<CopyOutStream, Error>
 where
-    I: IntoIterator<Item = &'a dyn ToSql>,
+    I: IntoIterator<Item = &'a (dyn ToSql + Sync)>,
     I::IntoIter: ExactSizeIterator,
 {
     let buf = query::encode(client, &statement, params)?;
