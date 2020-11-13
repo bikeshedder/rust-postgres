@@ -1,21 +1,10 @@
 use crate::codec::FrontendMessage;
 use crate::connection::RequestMessages;
-use crate::copy_out::CopyOutStream;
 use crate::query::RowStream;
-#[cfg(feature = "runtime")]
-use crate::tls::MakeTlsConnect;
-use crate::tls::TlsConnect;
-use crate::types::{BorrowToSql, ToSql, Type};
-#[cfg(feature = "runtime")]
-use crate::Socket;
-use crate::{
-    bind, query, slice_iter, CancelToken, Client, CopyInSink, Error, Portal, Row,
-    SimpleQueryMessage, Statement, ToStatement,
-};
-use bytes::Buf;
+use crate::types::{BorrowToSql, ToSql};
+use crate::{bind, query, slice_iter, Client, Error, Portal, Row, ToStatement};
 use futures::TryStreamExt;
 use postgres_protocol::message::frontend;
-use tokio::io::{AsyncRead, AsyncWrite};
 
 /// A representation of a PostgreSQL database transaction.
 ///
@@ -28,13 +17,24 @@ pub struct Transaction<'a> {
 }
 
 /// A representation of a PostgreSQL database savepoint.
-struct Savepoint {
-    name: String,
-    depth: u32,
+pub(crate) struct Savepoint {
+    pub name: String,
+    pub depth: u32,
+}
+
+impl Savepoint {
+    pub(crate) fn new(depth: u32, name: Option<String>) -> Self {
+        Self {
+            depth,
+            name: name.unwrap_or_else(|| format!("sp_{}", depth)),
+        }
+    }
 }
 
 impl<'a> Drop for Transaction<'a> {
     fn drop(&mut self) {
+        self.client.transaction_depth -= 1;
+
         if self.done {
             return;
         }
@@ -57,9 +57,17 @@ impl<'a> Drop for Transaction<'a> {
 
 impl<'a> Transaction<'a> {
     pub(crate) fn new(client: &'a mut Client) -> Transaction<'a> {
+        Self::new_savepoint(client, None)
+    }
+
+    pub(crate) fn new_savepoint(
+        client: &'a mut Client,
+        savepoint: Option<Savepoint>,
+    ) -> Transaction<'a> {
+        client.transaction_depth += 1;
         Transaction {
             client,
-            savepoint: None,
+            savepoint,
             done: false,
         }
     }
@@ -86,90 +94,6 @@ impl<'a> Transaction<'a> {
             "ROLLBACK".to_string()
         };
         self.client.batch_execute(&query).await
-    }
-
-    /// Like `Client::prepare`.
-    pub async fn prepare(&self, query: &str) -> Result<Statement, Error> {
-        self.client.prepare(query).await
-    }
-
-    /// Like `Client::prepare_typed`.
-    pub async fn prepare_typed(
-        &self,
-        query: &str,
-        parameter_types: &[Type],
-    ) -> Result<Statement, Error> {
-        self.client.prepare_typed(query, parameter_types).await
-    }
-
-    /// Like `Client::query`.
-    pub async fn query<T>(
-        &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Vec<Row>, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
-        self.client.query(statement, params).await
-    }
-
-    /// Like `Client::query_one`.
-    pub async fn query_one<T>(
-        &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Row, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
-        self.client.query_one(statement, params).await
-    }
-
-    /// Like `Client::query_opt`.
-    pub async fn query_opt<T>(
-        &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Option<Row>, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
-        self.client.query_opt(statement, params).await
-    }
-
-    /// Like `Client::query_raw`.
-    pub async fn query_raw<T, P, I>(&self, statement: &T, params: I) -> Result<RowStream, Error>
-    where
-        T: ?Sized + ToStatement,
-        P: BorrowToSql,
-        I: IntoIterator<Item = P>,
-        I::IntoIter: ExactSizeIterator,
-    {
-        self.client.query_raw(statement, params).await
-    }
-
-    /// Like `Client::execute`.
-    pub async fn execute<T>(
-        &self,
-        statement: &T,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<u64, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
-        self.client.execute(statement, params).await
-    }
-
-    /// Like `Client::execute_iter`.
-    pub async fn execute_raw<P, I, T>(&self, statement: &T, params: I) -> Result<u64, Error>
-    where
-        T: ?Sized + ToStatement,
-        P: BorrowToSql,
-        I: IntoIterator<Item = P>,
-        I::IntoIter: ExactSizeIterator,
-    {
-        self.client.execute_raw(statement, params).await
     }
 
     /// Binds a statement to a set of parameters, creating a `Portal` which can be incrementally queried.
@@ -227,83 +151,24 @@ impl<'a> Transaction<'a> {
         query::query_portal(self.client.inner(), portal, max_rows).await
     }
 
-    /// Like `Client::copy_in`.
-    pub async fn copy_in<T, U>(&self, statement: &T) -> Result<CopyInSink<U>, Error>
-    where
-        T: ?Sized + ToStatement,
-        U: Buf + 'static + Send,
-    {
-        self.client.copy_in(statement).await
-    }
-
-    /// Like `Client::copy_out`.
-    pub async fn copy_out<T>(&self, statement: &T) -> Result<CopyOutStream, Error>
-    where
-        T: ?Sized + ToStatement,
-    {
-        self.client.copy_out(statement).await
-    }
-
-    /// Like `Client::simple_query`.
-    pub async fn simple_query(&self, query: &str) -> Result<Vec<SimpleQueryMessage>, Error> {
-        self.client.simple_query(query).await
-    }
-
-    /// Like `Client::batch_execute`.
-    pub async fn batch_execute(&self, query: &str) -> Result<(), Error> {
-        self.client.batch_execute(query).await
-    }
-
-    /// Like `Client::cancel_token`.
-    pub fn cancel_token(&self) -> CancelToken {
-        self.client.cancel_token()
-    }
-
-    /// Like `Client::cancel_query`.
-    #[cfg(feature = "runtime")]
-    #[deprecated(since = "0.6.0", note = "use Transaction::cancel_token() instead")]
-    pub async fn cancel_query<T>(&self, tls: T) -> Result<(), Error>
-    where
-        T: MakeTlsConnect<Socket>,
-    {
-        #[allow(deprecated)]
-        self.client.cancel_query(tls).await
-    }
-
-    /// Like `Client::cancel_query_raw`.
-    #[deprecated(since = "0.6.0", note = "use Transaction::cancel_token() instead")]
-    pub async fn cancel_query_raw<S, T>(&self, stream: S, tls: T) -> Result<(), Error>
-    where
-        S: AsyncRead + AsyncWrite + Unpin,
-        T: TlsConnect<S>,
-    {
-        #[allow(deprecated)]
-        self.client.cancel_query_raw(stream, tls).await
-    }
-
-    /// Like `Client::transaction`, but creates a nested transaction via a savepoint.
-    pub async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
-        self._savepoint(None).await
-    }
-
     /// Like `Client::transaction`, but creates a nested transaction via a savepoint with the specified name.
     pub async fn savepoint<I>(&mut self, name: I) -> Result<Transaction<'_>, Error>
     where
         I: Into<String>,
     {
-        self._savepoint(Some(name.into())).await
+        self.client._savepoint(Some(name.into())).await
     }
+}
 
-    async fn _savepoint(&mut self, name: Option<String>) -> Result<Transaction<'_>, Error> {
-        let depth = self.savepoint.as_ref().map_or(0, |sp| sp.depth) + 1;
-        let name = name.unwrap_or_else(|| format!("sp_{}", depth));
-        let query = format!("SAVEPOINT {}", name);
-        self.batch_execute(&query).await?;
+impl std::ops::Deref for Transaction<'_> {
+    type Target = Client;
+    fn deref(&self) -> &Self::Target {
+        self.client
+    }
+}
 
-        Ok(Transaction {
-            client: self.client,
-            savepoint: Some(Savepoint { name, depth }),
-            done: false,
-        })
+impl std::ops::DerefMut for Transaction<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.client
     }
 }

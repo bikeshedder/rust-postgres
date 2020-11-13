@@ -148,6 +148,7 @@ pub struct Client {
     ssl_mode: SslMode,
     process_id: i32,
     secret_key: i32,
+    pub(crate) transaction_depth: u32,
 }
 
 impl Client {
@@ -173,6 +174,7 @@ impl Client {
             ssl_mode,
             process_id,
             secret_key,
+            transaction_depth: 0,
         }
     }
 
@@ -476,8 +478,12 @@ impl Client {
     ///
     /// The transaction will roll back by default - use the `commit` method to commit it.
     pub async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
-        self.batch_execute("BEGIN").await?;
-        Ok(Transaction::new(self))
+        if self.transaction_depth > 0 {
+            self._savepoint(None).await
+        } else {
+            self.batch_execute("BEGIN").await?;
+            Ok(Transaction::new(self))
+        }
     }
 
     /// Returns a builder for a transaction with custom settings.
@@ -545,6 +551,17 @@ impl Client {
     #[doc(hidden)]
     pub fn __private_api_close(&mut self) {
         self.inner.sender.close_channel()
+    }
+
+    pub(crate) async fn _savepoint(
+        &mut self,
+        name: Option<String>,
+    ) -> Result<Transaction<'_>, Error> {
+        let depth = self.transaction_depth + 1;
+        let savepoint = crate::transaction::Savepoint::new(depth, name);
+        let query = format!("SAVEPOINT {}", savepoint.name);
+        self.batch_execute(&query).await?;
+        Ok(Transaction::new_savepoint(self, Some(savepoint)))
     }
 }
 
